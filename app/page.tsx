@@ -51,11 +51,11 @@ export default function Home() {
     if (reviews.length === 0) return;
     
     // Create CSV content
-    const headers = ["Reviewer Name", "Rating", "Review Text", "Review Date", "Country"];
+    const headers = ["#", "Reviewer Name", "Rating", "Review Text", "Review Date", "Country"];
     const csvContent = [
       headers.join(","),
-      ...reviews.map(review => 
-        `"${review.reviewer.replace(/"/g, '""')}",${review.rating},"${review.text.replace(/"/g, '""')}","${review.date}","${(review as any).country || ''}"`
+      ...reviews.map((review, index) => 
+        `${index + 1},"${review.reviewer.replace(/"/g, '""')}",${review.rating},"${review.text.replace(/"/g, '""')}","${review.date}","${(review as any).country || ''}"`
       )
     ].join("\n");
     
@@ -129,6 +129,7 @@ export default function Home() {
                 <table className="min-w-full bg-white dark:bg-gray-800 rounded-lg overflow-hidden">
                   <thead className="bg-gray-100 dark:bg-gray-700">
                     <tr>
+                      <th className="py-3 px-4 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">#</th>
                       <th className="py-3 px-4 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Reviewer</th>
                       <th className="py-3 px-4 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Rating</th>
                       <th className="py-3 px-4 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Review</th>
@@ -138,7 +139,8 @@ export default function Home() {
                   </thead>
                   <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
                     {reviews.map((review, index) => (
-                      <tr key={index} className="hover:bg-gray-50 dark:hover:bg-gray-750">
+                      <tr key={index} className="hover:bg-blue-50 dark:hover:bg-gray-700 transition-colors duration-150">
+                        <td className="py-3 px-4 text-sm text-gray-800 dark:text-gray-200">{index + 1}</td>
                         <td className="py-3 px-4 text-sm text-gray-800 dark:text-gray-200">{review.reviewer}</td>
                         <td className="py-3 px-4 text-sm">
                           <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200">

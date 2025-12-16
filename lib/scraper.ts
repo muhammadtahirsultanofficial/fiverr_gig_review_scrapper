@@ -28,11 +28,64 @@ function sleep(ms: number): Promise<void> {
 }
 
 /**
+ * Extract reviews from a Fiverr gig page with fallback mechanisms
+ * @param url - The Fiverr gig URL
+ * @returns Promise resolving to an array of reviews
+ */
+export async function extractFiverrReviewsWithFallback(url: string): Promise<Review[]> {
+  try {
+    // First try the main Puppeteer scraper
+    console.log('Attempting to extract reviews with Puppeteer...');
+    const reviews = await extractFiverrReviews(url);
+
+    console.log(`Total reviews extracted: ${reviews}`);
+     
+    
+    // If we got reviews, return them
+    if (reviews.length > 0) {
+      console.log(`Successfully extracted ${reviews.length} reviews with Puppeteer`);
+      return reviews;
+    }
+    
+    // If no reviews, try the static scraper as fallback
+    console.log('No reviews found with Puppeteer, trying static scraper...');
+    const staticReviews = await extractFiverrReviewsStatic(url);
+    
+    if (staticReviews.length > 0) {
+      console.log(`Successfully extracted ${staticReviews.length} reviews with static scraper`);
+      return staticReviews;
+    }
+    
+    // If still no reviews, return empty array
+    console.log('No reviews found with either method');
+    return [];
+  } catch (error) {
+    console.error('Error in primary extraction method:', error);
+    
+    try {
+      // Try the static scraper as fallback
+      console.log('Attempting fallback to static scraper...');
+      const staticReviews = await extractFiverrReviewsStatic(url);
+      
+      if (staticReviews.length > 0) {
+        console.log(`Successfully extracted ${staticReviews.length} reviews with static scraper (fallback)`);
+        return staticReviews;
+      }
+    } catch (fallbackError) {
+      console.error('Error in fallback extraction method:', fallbackError);
+    }
+    
+    // If both methods failed, rethrow the original error
+    throw error;
+  }
+}
+
+/**
  * Extract reviews from a Fiverr gig page using Puppeteer (headless browser)
  * @param url - The Fiverr gig URL
  * @returns Promise resolving to an array of reviews
  */
-export async function extractFiverrReviews(url: string): Promise<Review[]> {
+async function extractFiverrReviews(url: string): Promise<Review[]> {
   // Validate URL
   if (!url || !url.includes('fiverr.com')) {
     throw new Error('Invalid Fiverr URL');
@@ -391,64 +444,11 @@ export async function extractFiverrReviews(url: string): Promise<Review[]> {
 }
 
 /**
- * Extract reviews from a Fiverr gig page with fallback mechanisms
- * @param url - The Fiverr gig URL
- * @returns Promise resolving to an array of reviews
- */
-export async function extractFiverrReviewsWithFallback(url: string): Promise<Review[]> {
-  try {
-    // First try the main Puppeteer scraper
-    console.log('Attempting to extract reviews with Puppeteer...');
-    const reviews = await extractFiverrReviews(url);
-
-    console.log(`Total reviews extracted: ${reviews}`);
-     
-    
-    // If we got reviews, return them
-    if (reviews.length > 0) {
-      console.log(`Successfully extracted ${reviews.length} reviews with Puppeteer`);
-      return reviews;
-    }
-    
-    // If no reviews, try the static scraper as fallback
-    console.log('No reviews found with Puppeteer, trying static scraper...');
-    const staticReviews = await extractFiverrReviewsStatic(url);
-    
-    if (staticReviews.length > 0) {
-      console.log(`Successfully extracted ${staticReviews.length} reviews with static scraper`);
-      return staticReviews;
-    }
-    
-    // If still no reviews, return empty array
-    console.log('No reviews found with either method');
-    return [];
-  } catch (error) {
-    console.error('Error in primary extraction method:', error);
-    
-    try {
-      // Try the static scraper as fallback
-      console.log('Attempting fallback to static scraper...');
-      const staticReviews = await extractFiverrReviewsStatic(url);
-      
-      if (staticReviews.length > 0) {
-        console.log(`Successfully extracted ${staticReviews.length} reviews with static scraper (fallback)`);
-        return staticReviews;
-      }
-    } catch (fallbackError) {
-      console.error('Error in fallback extraction method:', fallbackError);
-    }
-    
-    // If both methods failed, rethrow the original error
-    throw error;
-  }
-}
-
-/**
  * Alternative scraper using Cheerio for static HTML parsing (faster but less reliable)
  * @param url - The Fiverr gig URL
  * @returns Promise resolving to an array of reviews
  */
-export async function extractFiverrReviewsStatic(url: string): Promise<Review[]> {
+async function extractFiverrReviewsStatic(url: string): Promise<Review[]> {
   try {
     // Validate URL
     if (!url || !url.includes('fiverr.com')) {
