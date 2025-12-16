@@ -1,0 +1,40 @@
+{
+  "name": "gig_review_extractor",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint",
+    "debug-fiverr": "ts-node debugFiverr.ts",
+    "debug-reviews": "ts-node fiverrDebug.ts",
+    "analyze-fiverr": "ts-node analyzeFiverr.ts",
+    "test-scraper": "ts-node testScraper.ts",
+    "debug-selectors": "ts-node debugSelectors.ts",
+    "fiverr-analysis": "ts-node fiverrAnalysis.ts"
+  },
+  "dependencies": {
+    "next": "16.0.10",
+    "react": "19.2.1",
+    "react-dom": "19.2.1",
+    "puppeteer": "^22.0.0",
+    "axios": "^1.7.9",
+    "cheerio": "^1.0.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "16.0.10",
+    "tailwindcss": "^4",
+    "typescript": "^5",
+    "jest": "^29.7.0",
+    "@types/jest": "^29.5.14",
+    "ts-jest": "^29.2.5",
+    "ts-node": "^10.9.2"
+  }
+}
