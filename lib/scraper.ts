@@ -28,6 +28,431 @@ function sleep(ms: number): Promise<void> {
 }
 
 /**
+ * Click "Show More Reviews" until all reviews are loaded
+ * @param page - Puppeteer page instance
+ */
+async function loadAllReviews(page: any) {
+  console.log('Loading all reviews...');
+  let clickCount = 0;
+  const maxClicks = 50; // Safety limit to prevent infinite loops
+  
+  while (clickCount < maxClicks) {
+    try {
+      // Wait a bit for any animations or loading
+      await sleep(2000);
+      
+      // Scroll to the reviews section first
+      await page.evaluate(() => {
+        const reviewSection = document.querySelector('.reviews-section, [data-testid="reviews-section"], .gig-reviews');
+        if (reviewSection) {
+          reviewSection.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        } else {
+          // Fallback to scrolling to bottom
+          window.scrollTo(0, document.body.scrollHeight * 0.8);
+        }
+      });
+      
+      // Wait for scroll to complete
+      await sleep(1000);
+      
+      // Look for the "Show More" button using multiple strategies
+      const showMoreButton = await page.evaluateHandle(() => {
+        // Try different selectors for the "Show More" button
+        const selectors = [
+          'button[data-testid="show-more-button"]',
+          'button[class*="show-more"]',
+          'button[class*="load-more"]',
+          'button:enabled' // Generic enabled button as fallback
+        ];
+        
+        // First try to find by text content
+        const allButtons = document.querySelectorAll('button');
+        for (let i = 0; i < allButtons.length; i++) {
+          const button = allButtons[i] as HTMLButtonElement;
+          const text = (button.textContent || '').toLowerCase().trim();
+          if (text.includes('show more') || text.includes('load more') || text.includes('view more')) {
+            // Check if button is visible and enabled
+            const style = window.getComputedStyle(button);
+            if (style.display !== 'none' && style.visibility !== 'hidden' && !button.disabled) {
+              return button;
+            }
+          }
+        }
+        
+        // Then try by selectors
+        for (const selector of selectors) {
+          const buttons = document.querySelectorAll(selector);
+          for (let i = 0; i < buttons.length; i++) {
+            const button = buttons[i] as HTMLButtonElement;
+            // Check if button is visible and enabled
+            const style = window.getComputedStyle(button);
+            if (style.display !== 'none' && style.visibility !== 'hidden' && !button.disabled) {
+              const text = (button.textContent || '').toLowerCase().trim();
+              if (text.includes('show more') || text.includes('load more') || text.includes('view more')) {
+                return button;
+              }
+            }
+          }
+        }
+        
+        return null;
+      });
+      
+      // If no button found, break the loop
+      if (!showMoreButton || showMoreButton.asElement() === null) {
+        console.log('No more "Show More" buttons found');
+        break;
+      }
+      
+      // Click the button
+      console.log(`Clicking "Show More" button (click #${clickCount + 1})`);
+      await showMoreButton.click();
+      clickCount++;
+      
+      // Wait for new content to load
+      await sleep(3000);
+      
+      // Scroll a bit to trigger any lazy loading
+      await page.evaluate(() => {
+        window.scrollBy(0, 300);
+      });
+      
+      // Wait a bit more for rendering
+      await sleep(2000);
+    } catch (error) {
+      console.log('Error clicking "Show More" button:', (error as Error).message);
+      break;
+    }
+  }
+  
+  console.log(`Finished loading reviews after ${clickCount} clicks`);
+  // Final wait to ensure all content is loaded
+  await sleep(3000);
+}
+
+/**
+ * Extract reviews safely with deduplication
+ * @param page - Puppeteer page instance
+ * @returns Array of reviews
+ */
+async function extractReviews(page: any): Promise<Review[]> {
+  return await page.evaluate(() => {
+    const results: any[] = [];
+    const seen = new Set<string>();
+    
+    // Try multiple approaches to find review containers
+    console.log('Attempting to find review elements...');
+    
+    // Approach 1: Look for specific review container classes
+    const reviewContainerSelectors = [
+      '[data-testid="review-item"]',
+      '.review-item-component',
+      '.carousel-review-item',
+      '.review-list .review-item-component-wrapper',
+      '.gig-page-reviews .review-item-component',
+      '.reviews-wrap .review-item-component',
+      '[class*="review"][class*="item"]',
+      '[class*="review"][class*="card"]',
+      '.review-container',
+      '.feedback-item'
+    ];
+    
+    let reviewElements: Element[] = [];
+    
+    // Try each selector
+    for (const selector of reviewContainerSelectors) {
+      const elements = Array.from(document.querySelectorAll(selector));
+      if (elements.length > 0) {
+        console.log(`Found ${elements.length} elements with selector: ${selector}`);
+        reviewElements = reviewElements.concat(elements);
+      }
+    }
+    
+    // Approach 2: If we still don't have elements, look for elements with review-related class names
+    if (reviewElements.length === 0) {
+      console.log('Trying broader approach...');
+      const allElements = Array.from(document.querySelectorAll('div, article, section'));
+      const reviewClassPatterns = [
+        'review', 'feedback', 'testimonial', 'carousel-review', 
+        'review-item', 'review-component', 'review-card'
+      ];
+      
+      reviewElements = allElements.filter(element => {
+        const className = element.className || '';
+        return reviewClassPatterns.some(pattern => 
+          className.toLowerCase().includes(pattern));
+      });
+      
+      console.log(`Found ${reviewElements.length} elements with review class patterns`);
+    }
+    
+    // Approach 3: If still no elements, look for elements containing review-like text
+    if (reviewElements.length === 0) {
+      console.log('Trying text-based approach...');
+      const allElements = Array.from(document.querySelectorAll('div, article, section'));
+      reviewElements = allElements.filter(el => {
+        const text = el.textContent || '';
+        const hasStars = text.includes('★') || text.includes('☆');
+        const hasReviewKeywords = text.toLowerCase().includes('review') || 
+                                 text.toLowerCase().includes('feedback') ||
+                                 text.toLowerCase().includes('excellent') ||
+                                 text.toLowerCase().includes('great') ||
+                                 text.toLowerCase().includes('perfect');
+        return hasStars && hasReviewKeywords && text.length > 50;
+      });
+      
+      console.log(`Found ${reviewElements.length} elements with review text patterns`);
+    }
+    
+    // Deduplicate elements by their HTML content
+    const uniqueElements: Element[] = [];
+    const seenHTML = new Set<string>();
+    
+    reviewElements.forEach(element => {
+      const html = element.outerHTML;
+      if (!seenHTML.has(html)) {
+        seenHTML.add(html);
+        uniqueElements.push(element);
+      }
+    });
+    
+    reviewElements = uniqueElements;
+    console.log(`Processing ${reviewElements.length} unique review elements`);
+    
+    reviewElements.forEach((el, index) => {
+      try {
+        console.log(`Processing review element #${index + 1}`);
+        
+        // Skip if this looks like a button container or pagination
+        const elementText = (el.textContent || '').toLowerCase();
+        if (elementText.includes('show more reviews') || 
+            elementText.includes('load more') || 
+            elementText.includes('see all') ||
+            elementText.includes('view all')) {
+          console.log('Skipping button/pagination element');
+          return;
+        }
+        
+        // Extract reviewer information using multiple strategies
+        let reviewerName = '';
+        
+        // Strategy 1: Look for links with user URLs
+        const userLink = el.querySelector('a[href*="/users/"]');
+        if (userLink) {
+          const href = userLink.getAttribute('href');
+          if (href) {
+            const match = href.match(/\/users\/([^\/\?#]+)/);
+            if (match) {
+              reviewerName = match[1];
+            }
+          }
+        }
+        
+        // Strategy 2: Look for data-testid attributes
+        if (!reviewerName) {
+          const reviewerElement = el.querySelector('[data-testid="review-buyer-name"], [data-testid="buyer-username"]');
+          if (reviewerElement) {
+            reviewerName = reviewerElement.textContent?.trim() || '';
+          }
+        }
+        
+        // Strategy 3: Look for specific classes
+        if (!reviewerName) {
+          const reviewerSelectors = [
+            '.reviewer-name',
+            '.buyer-name',
+            '.username',
+            '[class*="reviewer"][class*="name"]',
+            '[class*="buyer"][class*="name"]'
+          ];
+          
+          for (const selector of reviewerSelectors) {
+            const nameElement = el.querySelector(selector);
+            if (nameElement && nameElement.textContent) {
+              reviewerName = nameElement.textContent.trim();
+              break;
+            }
+          }
+        }
+        
+        // Strategy 4: Look for text that looks like a username (no spaces, not too long)
+        if (!reviewerName) {
+          // Get all text nodes and find ones that look like usernames
+          const allText = el.textContent || '';
+          const textNodes = allText.split(/\s+/);
+          for (const node of textNodes) {
+            // Simple validation - usernames are usually shorter and don't contain country names
+            if (node.length > 2 && node.length < 30 && 
+                !node.includes(' ') && 
+                !/[0-9]/.test(node) &&
+                !['stars', 'star', 'review', 'reviews', 'feedback', 'excellent', 'great', 'perfect'].includes(node.toLowerCase())) {
+              // Check if it's not a country name
+              const countryIndicators = ['united', 'kingdom', 'states', 'america', 'canada', 'australia', 'germany', 'france', 'italy', 'spain'];
+              if (!countryIndicators.some(indicator => node.toLowerCase().includes(indicator))) {
+                reviewerName = node;
+                break;
+              }
+            }
+          }
+        }
+        
+        // Extract country information
+        let country = '';
+        const countryElement = el.querySelector('[class*="flag"], img[alt*="flag"], [data-testid="country-name"]');
+        if (countryElement) {
+          country = countryElement.getAttribute('alt') || 
+                   countryElement.getAttribute('title') || 
+                   countryElement.textContent?.trim() || 
+                   countryElement.getAttribute('data-testid') === 'country-name' ? countryElement.textContent?.trim() || '' : '';
+        }
+        
+        // Extract rating using multiple strategies
+        let rating = 0;
+        
+        // Strategy 1: Look for aria-label with rating info
+        const ratingElement = el.querySelector('[aria-label*="out of"], [aria-label*="star"]');
+        if (ratingElement) {
+          const ariaLabel = ratingElement.getAttribute('aria-label') || '';
+          const match = ariaLabel.match(/(\d+(?:\.\d+)?)\s*(?:out of|\/)\s*(\d+(?:\.\d+)?)/i);
+          if (match) {
+            rating = parseFloat(match[1]);
+          }
+        }
+        
+        // Strategy 2: Count star elements if no aria-label worked
+        if (rating === 0) {
+          // Look for SVG stars
+          const starElements = el.querySelectorAll('svg, [class*="star"]');
+          let filledStars = 0;
+          
+          starElements.forEach(star => {
+            const html = star.outerHTML || '';
+            // Check for filled star indicators
+            if (html.includes('fill') || html.includes('★') || 
+                html.includes('full') || html.includes('active') ||
+                html.includes('star-fill') || html.includes('star-filled')) {
+              filledStars++;
+            }
+          });
+          
+          rating = Math.min(5, filledStars);
+        }
+        
+        // Strategy 3: Look for text-based rating
+        if (rating === 0) {
+          const ratingText = el.textContent || '';
+          const ratingMatch = ratingText.match(/(\d+(?:\.\d+)?)\s*(?:out of|\/)\s*(\d+(?:\.\d+)?)/i);
+          if (ratingMatch) {
+            rating = Math.round(parseFloat(ratingMatch[1]));
+          }
+        }
+        
+        // Extract review text
+        let reviewText = '';
+        
+        // Strategy 1: Look for specific data-testid or classes
+        const textSelectors = [
+          '[data-testid="review-content"]',
+          '[data-testid="review-comment"]',
+          '.review-item-description',
+          '.review-description',
+          '.review-text',
+          '.comment'
+        ];
+        
+        for (const selector of textSelectors) {
+          const textElement = el.querySelector(selector);
+          if (textElement && textElement.textContent) {
+            const content = textElement.textContent.trim();
+            // Filter out short texts and button text
+            if (content.length > 10 && 
+                !content.toLowerCase().includes('show more') && 
+                !content.toLowerCase().includes('load more') &&
+                !content.toLowerCase().includes('see all') &&
+                !content.toLowerCase().includes('view all') &&
+                content.length < 2000) {
+              reviewText = content;
+              break;
+            }
+          }
+        }
+        
+        // Strategy 2: Look for paragraph elements
+        if (!reviewText) {
+          const pElements = el.querySelectorAll('p');
+          for (const p of pElements) {
+            const content = p.textContent?.trim() || '';
+            if (content.length > 20 && content.length < 2000) {
+              reviewText = content;
+              break;
+            }
+          }
+        }
+        
+        // Extract date
+        let date = '';
+        
+        // Strategy 1: Look for time elements
+        const timeElement = el.querySelector('time');
+        if (timeElement) {
+          date = timeElement.getAttribute('datetime') || timeElement.textContent?.trim() || '';
+        }
+        
+        // Strategy 2: Look for date-related classes
+        if (!date) {
+          const dateSelectors = [
+            '[data-testid="review-date"]',
+            '.review-date',
+            '.date',
+            '[class*="date"]',
+            '.timestamp'
+          ];
+          
+          for (const selector of dateSelectors) {
+            const dateElement = el.querySelector(selector);
+            if (dateElement && dateElement.textContent) {
+              date = dateElement.textContent.trim();
+              break;
+            }
+          }
+        }
+        
+        console.log(`Extracted - Reviewer: ${reviewerName}, Rating: ${rating}, Text: ${reviewText.substring(0, 30)}..., Date: ${date}, Country: ${country}`);
+        
+        // Create a stable key for deduplication
+        const key = `${reviewerName}|${reviewText.slice(0, 50)}|${date}`;
+        
+        // Skip if we've seen this review before
+        if (seen.has(key)) {
+          console.log('Skipping duplicate review');
+          return;
+        }
+        
+        // Validate that we have essential information
+        if (reviewerName && rating > 0 && reviewText) {
+          seen.add(key);
+          results.push({
+            reviewer: reviewerName,
+            rating: rating,
+            text: reviewText,
+            date: date,
+            country: country
+          });
+          console.log('Added review to results');
+        } else {
+          console.log('Skipped review due to missing essential information');
+        }
+      } catch (error) {
+        console.error('Error extracting review:', error);
+      }
+    });
+    
+    console.log(`Extracted ${results.length} unique reviews`);
+    return results;
+  });
+}
+
+/**
  * Extract reviews from a Fiverr gig page with fallback mechanisms
  * @param url - The Fiverr gig URL
  * @returns Promise resolving to an array of reviews
@@ -38,7 +463,7 @@ export async function extractFiverrReviewsWithFallback(url: string): Promise<Rev
     console.log('Attempting to extract reviews with Puppeteer...');
     const reviews = await extractFiverrReviews(url);
 
-    console.log(`Total reviews extracted: ${reviews}`);
+    console.log(`Total reviews extracted: ${reviews.length}`);
      
     
     // If we got reviews, return them
@@ -94,7 +519,7 @@ async function extractFiverrReviews(url: string): Promise<Review[]> {
   console.log(`Starting extraction for URL: ${url}`);
 
   const browser = await puppeteer.launch({
-    headless: false, // Keep visible for CAPTCHA handling
+    headless: false, // Run in headless mode for production
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
@@ -155,283 +580,25 @@ async function extractFiverrReviews(url: string): Promise<Review[]> {
     // Wait a bit after CAPTCHA resolution
     await sleep(3000);
     
-    // Scroll down multiple times to trigger lazy loading
-    console.log('Scrolling to load reviews...');
-    for (let i = 0; i < 15; i++) {
-      await page.evaluate(() => {
-        window.scrollBy(0, window.innerHeight);
-      });
-      await sleep(1500);
-    }
+    // Scroll down to trigger lazy loading of reviews section
+    console.log('Scrolling to load reviews section...');
+    await page.evaluate(() => {
+      window.scrollTo(0, document.body.scrollHeight * 0.7);
+    });
+    await sleep(3000);
     
-    // Scroll to the bottom to trigger all lazy loading
+    // Load all reviews by clicking "Show More" buttons
+    await loadAllReviews(page);
+    
+    // Final scroll to bottom to ensure everything is loaded
     await page.evaluate(() => {
       window.scrollTo(0, document.body.scrollHeight);
     });
-    
-    // Wait for content to load after scrolling
-    await sleep(5000);
-    
-    // Try to find and click "See all reviews" or "Show More" buttons
-    console.log('Looking for review buttons...');
-    try {
-      // Look for "See all reviews" button first
-      const seeAllButtons = await page.$$('button');
-      for (const button of seeAllButtons) {
-        const buttonText = await page.evaluate(el => el.textContent, button);
-        if (buttonText && buttonText.toLowerCase().includes('see all')) {
-          console.log(`Clicking "See all reviews" button: ${buttonText}`);
-          await button.click();
-          await sleep(5000);
-          break;
-        }
-      }
-      
-      // Then look for "Show More" buttons
-      const showMoreButtons = await page.$$('button');
-      for (const button of showMoreButtons) {
-        const buttonText = await page.evaluate(el => el.textContent, button);
-        if (buttonText && 
-            (buttonText.toLowerCase().includes('show more') || 
-             buttonText.toLowerCase().includes('load more'))) {
-          console.log(`Clicking "Show More" button: ${buttonText}`);
-          await button.click();
-          await sleep(5000);
-          
-          // Scroll after clicking
-          await page.evaluate(() => {
-            window.scrollBy(0, 500);
-          });
-          await sleep(3000);
-        }
-      }
-    } catch (error) {
-      console.log('Error clicking review buttons:', (error as Error).message);
-    }
-    
-    // Final scroll to bottom
-    await page.evaluate(() => {
-      window.scrollTo(0, document.body.scrollHeight);
-    });
-    await sleep(5000);
+    await sleep(3000);
     
     console.log('Extracting reviews...');
-    // Extract reviews using Fiverr-specific selectors
-    const reviews: Review[] = await page.evaluate(() => {
-      // Fiverr-specific review selectors we identified
-      const reviewContainerSelectors = [
-        '.review-item-component',
-        '.carousel-review-item',
-        '.review-list .review-item-component-wrapper',
-        '.gig-page-reviews .review-item-component',
-        '.reviews-wrap .review-item-component'
-      ];
-      
-      let reviewElements: Element[] = [];
-      
-      // Try each selector
-      for (const selector of reviewContainerSelectors) {
-        const elements = Array.from(document.querySelectorAll(selector));
-        if (elements.length > 0) {
-          console.log(`Found ${elements.length} elements with selector: ${selector}`);
-          reviewElements = reviewElements.concat(elements);
-        }
-      }
-      
-      // If we still don't have elements, try a broader approach
-      if (reviewElements.length === 0) {
-        console.log('Trying broader approach...');
-        // Look for elements with review-related class names
-        const allElements = Array.from(document.querySelectorAll('*'));
-        const reviewClassPatterns = [
-          'review', 'feedback', 'testimonial', 'carousel-review', 
-          'review-item', 'review-component'
-        ];
-        
-        allElements.forEach(element => {
-          const className = element.className || '';
-          const hasReviewClass = reviewClassPatterns.some(pattern => 
-            className.toLowerCase().includes(pattern));
-          
-          if (hasReviewClass) {
-            reviewElements.push(element);
-          }
-        });
-      }
-      
-      // Deduplicate elements
-      const uniqueElements: Element[] = [];
-      const seenHTML = new Set<string>();
-      
-      reviewElements.forEach(element => {
-        const html = element.outerHTML;
-        if (!seenHTML.has(html)) {
-          seenHTML.add(html);
-          uniqueElements.push(element);
-        }
-      });
-      
-      reviewElements = uniqueElements;
-      console.log(`Found ${reviewElements.length} potential review elements`);
-      
-      const reviews: Review[] = [];
-      
-      // Process each potential review element
-      reviewElements.forEach((element) => {
-        try {
-          // Skip if this looks like a button container
-          const elementText = element.textContent || '';
-          if (elementText.includes('Show More Reviews') || 
-              elementText.includes('Load More') || 
-              elementText.includes('See All') ||
-              elementText.includes('View All')) {
-            return;
-          }
-          
-          // Extract reviewer name
-          let reviewer = '';
-          // Try specific Fiverr reviewer selectors
-          const reviewerSelectors = [
-            '.reviewer-name',
-            '.buyer-name',
-            '[class*="reviewer"]',
-            '[class*="buyer"]'
-          ];
-          
-          for (const selector of reviewerSelectors) {
-            const nameElement = element.querySelector(selector);
-            if (nameElement && nameElement.textContent) {
-              reviewer = nameElement.textContent.trim();
-              break;
-            }
-          }
-          
-          // If still no reviewer, look for text that looks like a name
-          if (!reviewer) {
-            const textNodes = element.textContent || '';
-            // Simple pattern for names (capitalized words)
-            const nameMatch = textNodes.match(/[A-Z][a-z]+ [A-Z][a-z]+/);
-            if (nameMatch) {
-              reviewer = nameMatch[0];
-            }
-          }
-          
-          // Extract rating
-          let rating = 0;
-          // Look for star elements
-          const starElements = element.querySelectorAll('svg');
-          if (starElements.length > 0) {
-            // Count filled stars
-            let filledStars = 0;
-            starElements.forEach(star => {
-              const html = star.outerHTML;
-              // Check for filled star indicators
-              if (html.includes('fill') || html.includes('★') || 
-                  html.includes('full') || html.includes('active') ||
-                  html.includes('star-fill') || html.includes('star-filled')) {
-                filledStars++;
-              }
-            });
-            rating = Math.min(5, filledStars);
-          }
-          
-          // If no star-based rating, look for text-based rating
-          if (rating === 0) {
-            const ratingText = element.textContent || '';
-            const ratingMatch = ratingText.match(/(\d+(?:\.\d+)?)\s*(?:out of|\/)\s*(\d+(?:\.\d+)?)/i);
-            if (ratingMatch) {
-              rating = Math.round(parseFloat(ratingMatch[1]));
-            }
-          }
-          
-          // Extract review text
-          let text = '';
-          // Try specific Fiverr review text selectors
-          const textSelectors = [
-            '.review-item-description',
-            '.review-description',
-            '.review-text',
-            'p'
-          ];
-          
-          for (const selector of textSelectors) {
-            const textElements = element.querySelectorAll(selector);
-            for (const textElement of textElements) {
-              const content = textElement.textContent || '';
-              // Filter out short texts and button text
-              if (content.length > 20 && 
-                  !content.includes('Show More') && 
-                  !content.includes('Load More') &&
-                  !content.includes('See All') &&
-                  !content.includes('View All') &&
-                  content.length < 1000) {
-                text = content.trim();
-                break;
-              }
-            }
-            if (text) break;
-          }
-          
-          // Extract date
-          let date = '';
-          // Try specific Fiverr date selectors
-          const dateSelectors = [
-            'time',
-            '[class*="date"]',
-            '[class*="time"]'
-          ];
-          
-          for (const selector of dateSelectors) {
-            const dateElement = element.querySelector(selector);
-            if (dateElement) {
-              date = dateElement.textContent?.trim() || dateElement.getAttribute('datetime') || '';
-              break;
-            }
-          }
-          
-          // Extract country flag (if present)
-          let country = '';
-          const flagElement = element.querySelector('[class*="flag"], img[alt*="flag"]');
-          if (flagElement) {
-            country = flagElement.getAttribute('alt') || flagElement.getAttribute('title') || '';
-          }
-          
-          // Only add reviews with essential information
-          if (reviewer && rating > 0 && text) {
-            const review: Review = {
-              reviewer,
-              rating,
-              text,
-              date
-            };
-            
-            // Add country if available
-            if (country) {
-              (review as any).country = country;
-            }
-            
-            reviews.push(review);
-          }
-        } catch (error) {
-          console.error('Error extracting review:', error);
-        }
-      });
-      
-      // Remove duplicates
-      const uniqueReviews: Review[] = [];
-      const seen = new Set<string>();
-      
-      reviews.forEach(review => {
-        const identifier = `${review.reviewer}-${review.text.substring(0, 30)}`;
-        if (!seen.has(identifier)) {
-          seen.add(identifier);
-          uniqueReviews.push(review);
-        }
-      });
-      
-      console.log(`Total unique reviews extracted: ${uniqueReviews.length}`);
-      return uniqueReviews;
-    });
+    // Extract reviews using the improved extraction function
+    const reviews: Review[] = await extractReviews(page);
     
     console.log(`Successfully extracted ${reviews.length} reviews`);
     await browser.close();
