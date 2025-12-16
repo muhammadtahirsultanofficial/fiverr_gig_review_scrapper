@@ -23,7 +23,7 @@ A Next.js application that extracts public reviews from Fiverr gig pages and exp
 
 1. Clone the repository:
    ```bash
-   git clone <repository-url>
+   git clone https://github.com/muhammadtahirsultanofficial/fiverr_gig_review_scrapper
    ```
 
 2. Install dependencies:
